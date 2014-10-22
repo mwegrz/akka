@@ -135,6 +135,44 @@ object ProcessorSpec {
       case DeleteN(toSnr) ⇒ deleteMessages(toSnr)
     }
   }
+
+  class StackableTestProcessor extends StackableTestProcessor.BaseProbeActor with Processor {
+    override def persistenceId: String = "StackableTestProcessor"
+  }
+
+  object StackableTestProcessor {
+    trait BaseProbeActor extends Actor with ActorLogging {
+
+      override protected[akka] def aroundPreStart() = {
+        log.warning("aroundPreStart called")
+        super.aroundPreStart()
+      }
+
+      override protected[akka] def aroundPostStop() = {
+        log.warning("aroundPostStop called")
+        super.aroundPostStop()
+      }
+
+      override protected[akka] def aroundPreRestart(reason: Throwable, message: Option[Any]) = {
+        log.warning("aroundPreRestart called")
+        super.aroundPreRestart(reason, message)
+      }
+
+      override protected[akka] def aroundPostRestart(reason: Throwable) = {
+        log.warning("aroundPostRestart called")
+        super.aroundPostRestart(reason)
+      }
+
+      override protected[akka] def aroundReceive(receive: Receive, message: Any) = {
+        log.warning("aroundReceive called")
+        super.aroundReceive(receive, message)
+      }
+
+      def receive = {
+        case "restart" ⇒ throw new Exception("triggering restart")
+      }
+    }
+  }
 }
 
 abstract class ProcessorSpec(config: Config) extends AkkaSpec(config) with PersistenceSpec with ImplicitSender {
@@ -354,6 +392,18 @@ abstract class ProcessorSpec(config: Config) extends AkkaSpec(config) with Persi
       processor ! Persistent("a")
       processor ! Persistent("b")
       List(0, 1, 2, 3) foreach (expectMsg(_))
+    }
+
+    "be used as a stackable modification" in {
+      val processor = EventFilter.warning(message = "aroundPreStart called", occurrences = 1) intercept {
+        system.actorOf(Props(classOf[StackableTestProcessor]))
+      }
+
+      EventFilter.warning(pattern = "around(PreRestart|PostRestart|Receive) called", occurrences = 3) intercept {
+        processor ! "restart"
+      }
+
+      EventFilter.warning(message = "aroundPostStop called", occurrences = 1) intercept { processor ! PoisonPill }
     }
   }
 }

@@ -268,14 +268,16 @@ private[akka] trait ProcessorImpl extends Actor with Recovery {
    * INTERNAL API.
    */
   override protected[akka] def aroundPreStart(): Unit = {
-    try preStart() finally super.preStart()
+    // calls `super.aroundPreStart` to allow Processor to be used as a stackable modification
+    try preStart() finally super.aroundPreStart()
   }
 
   /**
    * INTERNAL API.
    */
   override protected[akka] def aroundPostStop(): Unit = {
-    try unstashAll(unstashFilterPredicate) finally postStop()
+    // calls `super.aroundPostStop` to allow Processor to be used as a stackable modification
+    try unstashAll(unstashFilterPredicate) finally super.aroundPostStop()
   }
 
   /**
@@ -321,7 +323,19 @@ private[akka] trait ProcessorImpl extends Actor with Recovery {
    * opt out from stopping child actors, they should override this method and call [[preRestart]] only.
    */
   def preRestartDefault(reason: Throwable, message: Option[Any]): Unit = {
-    try preRestart(reason, message) finally super.preRestart(reason, message)
+    try preRestart(reason, message) finally {
+      // tests fail when opting out from calling super.preRestart and stopping children - the method description
+      // might be misleading. To allow the Processor to be used as a stackable modification we need to call
+      // `super.aroundPreRestart`. Since calling both super.preRestart and super.aroundPreRestart would run
+      // postStop twice, the logic from  super.preRestart (from UnrestrictedStash and Actor) has been copied here.
+      try { unstashAll() } finally {
+        context.children foreach { child ⇒
+          context.unwatch(child)
+          context.stop(child)
+        }
+        super.aroundPreRestart(reason, message)
+      }
+    }
   }
 
   override def unhandled(message: Any): Unit = {
