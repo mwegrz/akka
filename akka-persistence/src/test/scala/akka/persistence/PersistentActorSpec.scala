@@ -403,6 +403,74 @@ object PersistentActorSpec {
     }
   }
 
+  class StackableTestPersistentActor(val probe: ActorRef) extends StackableTestPersistentActor.BaseActor with PersistentActor with StackableTestPersistentActor.MixinActor {
+    override def persistenceId: String = "StackableTestPersistentActor"
+
+    def receiveCommand = {
+      case "restart" ⇒ throw new Exception("triggering restart")
+    }
+
+    def receiveRecover = {
+      case _ ⇒ ()
+    }
+  }
+
+  object StackableTestPersistentActor {
+    trait BaseActor extends Actor { this: StackableTestPersistentActor ⇒
+      override protected[akka] def aroundPreStart() = {
+        probe ! "base aroundPreStart"
+        super.aroundPreStart()
+      }
+
+      override protected[akka] def aroundPostStop() = {
+        probe ! "base aroundPostStop"
+        super.aroundPostStop()
+      }
+
+      override protected[akka] def aroundPreRestart(reason: Throwable, message: Option[Any]) = {
+        probe ! "base aroundPreRestart"
+        super.aroundPreRestart(reason, message)
+      }
+
+      override protected[akka] def aroundPostRestart(reason: Throwable) = {
+        probe ! "base aroundPostRestart"
+        super.aroundPostRestart(reason)
+      }
+
+      override protected[akka] def aroundReceive(receive: Receive, message: Any) = {
+        probe ! "base aroundReceive"
+        super.aroundReceive(receive, message)
+      }
+    }
+
+    trait MixinActor extends Actor { this: StackableTestPersistentActor ⇒
+      override protected[akka] def aroundPreStart() = {
+        probe ! "mixin aroundPreStart"
+        super.aroundPreStart()
+      }
+
+      override protected[akka] def aroundPostStop() = {
+        probe ! "mixin aroundPostStop"
+        super.aroundPostStop()
+      }
+
+      override protected[akka] def aroundPreRestart(reason: Throwable, message: Option[Any]) = {
+        probe ! "mixin aroundPreRestart"
+        super.aroundPreRestart(reason, message)
+      }
+
+      override protected[akka] def aroundPostRestart(reason: Throwable) = {
+        probe ! "mixin aroundPostRestart"
+        super.aroundPostRestart(reason)
+      }
+
+      override protected[akka] def aroundReceive(receive: Receive, message: Any) = {
+        if (message == "restart" && recoveryFinished) { probe ! "mixin aroundReceive" }
+        super.aroundReceive(receive, message)
+      }
+    }
+  }
+
 }
 
 abstract class PersistentActorSpec(config: Config) extends AkkaSpec(config) with PersistenceSpec with ImplicitSender {
@@ -769,6 +837,23 @@ abstract class PersistentActorSpec(config: Config) extends AkkaSpec(config) with
       expectMsg("I am the recovered")
       processor2 ! GetState
       expectMsg(List("a-1", "a-2", "b-41", "b-42", "c-41", "c-42", RecoveryCompleted))
+    }
+  }
+  "A persistent actor" can {
+    "be used as a stackable modification" in {
+      val persistentActor = system.actorOf(Props(classOf[StackableTestPersistentActor], testActor))
+      expectMsg("mixin aroundPreStart")
+      expectMsg("base aroundPreStart")
+      persistentActor ! "restart"
+      expectMsg("mixin aroundReceive")
+      expectMsg("base aroundReceive")
+      expectMsg("mixin aroundPreRestart")
+      expectMsg("base aroundPreRestart")
+      expectMsg("mixin aroundPostRestart")
+      expectMsg("base aroundPostRestart")
+      persistentActor ! PoisonPill
+      expectMsg("mixin aroundPostStop")
+      expectMsg("base aroundPostStop")
     }
   }
 }

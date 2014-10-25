@@ -136,40 +136,67 @@ object ProcessorSpec {
     }
   }
 
-  class StackableTestProcessor extends StackableTestProcessor.BaseProbeActor with Processor {
-    override def persistenceId: String = "StackableTestProcessor"
+  class StackableTestProcessor(val probe: ActorRef) extends StackableTestProcessor.BaseActor with Processor with StackableTestProcessor.MixinActor {
+    override def persistenceId: String = "StackableTestPersistentActor"
+
+    def receive = {
+      case "restart" ⇒ throw new Exception("triggering restart")
+    }
+
   }
 
   object StackableTestProcessor {
-    trait BaseProbeActor extends Actor with ActorLogging {
-
+    trait BaseActor extends Actor { this: StackableTestProcessor ⇒
       override protected[akka] def aroundPreStart() = {
-        log.warning("aroundPreStart called")
+        probe ! "base aroundPreStart"
         super.aroundPreStart()
       }
 
       override protected[akka] def aroundPostStop() = {
-        log.warning("aroundPostStop called")
+        probe ! "base aroundPostStop"
         super.aroundPostStop()
       }
 
       override protected[akka] def aroundPreRestart(reason: Throwable, message: Option[Any]) = {
-        log.warning("aroundPreRestart called")
+        probe ! "base aroundPreRestart"
         super.aroundPreRestart(reason, message)
       }
 
       override protected[akka] def aroundPostRestart(reason: Throwable) = {
-        log.warning("aroundPostRestart called")
+        probe ! "base aroundPostRestart"
         super.aroundPostRestart(reason)
       }
 
       override protected[akka] def aroundReceive(receive: Receive, message: Any) = {
-        log.warning("aroundReceive called")
+        probe ! "base aroundReceive"
         super.aroundReceive(receive, message)
       }
+    }
 
-      def receive = {
-        case "restart" ⇒ throw new Exception("triggering restart")
+    trait MixinActor extends Actor { this: StackableTestProcessor ⇒
+      override protected[akka] def aroundPreStart() = {
+        probe ! "mixin aroundPreStart"
+        super.aroundPreStart()
+      }
+
+      override protected[akka] def aroundPostStop() = {
+        probe ! "mixin aroundPostStop"
+        super.aroundPostStop()
+      }
+
+      override protected[akka] def aroundPreRestart(reason: Throwable, message: Option[Any]) = {
+        probe ! "mixin aroundPreRestart"
+        super.aroundPreRestart(reason, message)
+      }
+
+      override protected[akka] def aroundPostRestart(reason: Throwable) = {
+        probe ! "mixin aroundPostRestart"
+        super.aroundPostRestart(reason)
+      }
+
+      override protected[akka] def aroundReceive(receive: Receive, message: Any) = {
+        if (message == "restart" && recoveryFinished) { probe ! "mixin aroundReceive" }
+        super.aroundReceive(receive, message)
       }
     }
   }
@@ -395,15 +422,19 @@ abstract class ProcessorSpec(config: Config) extends AkkaSpec(config) with Persi
     }
 
     "be used as a stackable modification" in {
-      val processor = EventFilter.warning(message = "aroundPreStart called", occurrences = 1) intercept {
-        system.actorOf(Props(classOf[StackableTestProcessor]))
-      }
-
-      EventFilter.warning(pattern = "around(PreRestart|PostRestart|Receive) called", occurrences = 3) intercept {
-        processor ! "restart"
-      }
-
-      EventFilter.warning(message = "aroundPostStop called", occurrences = 1) intercept { processor ! PoisonPill }
+      val processor = system.actorOf(Props(classOf[StackableTestProcessor], testActor))
+      expectMsg("mixin aroundPreStart")
+      expectMsg("base aroundPreStart")
+      processor ! "restart"
+      expectMsg("mixin aroundReceive")
+      expectMsg("base aroundReceive")
+      expectMsg("mixin aroundPreRestart")
+      expectMsg("base aroundPreRestart")
+      expectMsg("mixin aroundPostRestart")
+      expectMsg("base aroundPostRestart")
+      processor ! PoisonPill
+      expectMsg("mixin aroundPostStop")
+      expectMsg("base aroundPostStop")
     }
   }
 }
