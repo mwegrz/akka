@@ -13,6 +13,7 @@ import akka.testkit.EventFilter
 import akka.testkit.TestProbe
 import java.util.concurrent.atomic.AtomicInteger
 import scala.util.Random
+import scala.util.control.NoStackTrace
 
 object PersistentActorSpec {
   final case class Cmd(data: Any)
@@ -407,12 +408,33 @@ object PersistentActorSpec {
     override def persistenceId: String = "StackableTestPersistentActor"
 
     def receiveCommand = {
-      case "restart" ⇒ throw new Exception("triggering restart")
+      case "restart" ⇒ throw new Exception("triggering restart") with NoStackTrace { override def toString = "Boom!" }
     }
 
     def receiveRecover = {
       case _ ⇒ ()
     }
+
+    override def preStart(): Unit = {
+      probe ! "preStart"
+      super.preStart()
+    }
+
+    override def postStop(): Unit = {
+      probe ! "postStop"
+      super.postStop()
+    }
+
+    override def preRestart(reason: Throwable, message: Option[Any]): Unit = {
+      probe ! "preRestart"
+      super.preRestart(reason, message)
+    }
+
+    override def postRestart(reason: Throwable): Unit = {
+      probe ! "postRestart"
+      super.postRestart(reason)
+    }
+
   }
 
   object StackableTestPersistentActor {
@@ -838,24 +860,35 @@ abstract class PersistentActorSpec(config: Config) extends AkkaSpec(config) with
       processor2 ! GetState
       expectMsg(List("a-1", "a-2", "b-41", "b-42", "c-41", "c-42", RecoveryCompleted))
     }
-  }
-  "A persistent actor" can {
     "be used as a stackable modification" in {
       val persistentActor = system.actorOf(Props(classOf[StackableTestPersistentActor], testActor))
       expectMsg("mixin aroundPreStart")
       expectMsg("base aroundPreStart")
+      expectMsg("preStart")
+
       persistentActor ! "restart"
       expectMsg("mixin aroundReceive")
       expectMsg("base aroundReceive")
+
       expectMsg("mixin aroundPreRestart")
       expectMsg("base aroundPreRestart")
+      expectMsg("preRestart")
+      expectMsg("postStop")
+
       expectMsg("mixin aroundPostRestart")
       expectMsg("base aroundPostRestart")
+      expectMsg("postRestart")
+      expectMsg("preStart")
+
       persistentActor ! PoisonPill
       expectMsg("mixin aroundPostStop")
       expectMsg("base aroundPostStop")
+      expectMsg("postStop")
+
+      expectNoMsg(100.millis)
     }
   }
+
 }
 
 class LeveldbPersistentActorSpec extends PersistentActorSpec(PersistenceSpec.config("leveldb", "LeveldbPersistentActorSpec"))

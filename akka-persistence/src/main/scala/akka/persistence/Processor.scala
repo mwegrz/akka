@@ -267,14 +267,6 @@ private[akka] trait ProcessorImpl extends Actor with Recovery {
   /**
    * INTERNAL API.
    */
-  override protected[akka] def aroundPreStart(): Unit = {
-    // calls `super.aroundPreStart` to allow Processor to be used as a stackable modification
-    try preStart() finally super.aroundPreStart()
-  }
-
-  /**
-   * INTERNAL API.
-   */
   override protected[akka] def aroundPostStop(): Unit = {
     // calls `super.aroundPostStop` to allow Processor to be used as a stackable modification
     try unstashAll(unstashFilterPredicate) finally super.aroundPostStop()
@@ -290,10 +282,10 @@ private[akka] trait ProcessorImpl extends Actor with Recovery {
       unstashAll(unstashFilterPredicate)
     } finally {
       message match {
-        case Some(WriteMessageSuccess(m, _)) ⇒ preRestartDefault(reason, Some(m))
-        case Some(LoopMessageSuccess(m, _))  ⇒ preRestartDefault(reason, Some(m))
-        case Some(ReplayedMessage(m))        ⇒ preRestartDefault(reason, Some(m))
-        case mo                              ⇒ preRestartDefault(reason, None)
+        case Some(WriteMessageSuccess(m, _)) ⇒ super.aroundPreRestart(reason, Some(m))
+        case Some(LoopMessageSuccess(m, _))  ⇒ super.aroundPreRestart(reason, Some(m))
+        case Some(ReplayedMessage(m))        ⇒ super.aroundPreRestart(reason, Some(m))
+        case mo                              ⇒ super.aroundPreRestart(reason, None)
       }
     }
   }
@@ -312,29 +304,10 @@ private[akka] trait ProcessorImpl extends Actor with Recovery {
    * a `Recover(lastSequenceNr)` message to `self` if `message` is defined, `Recover() otherwise`.
    */
   override def preRestart(reason: Throwable, message: Option[Any]): Unit = {
+    super.preRestart(reason, message)
     message match {
       case Some(_) ⇒ self ! Recover(toSequenceNr = lastSequenceNr)
       case None    ⇒ self ! Recover()
-    }
-  }
-
-  /**
-   * Calls [[preRestart]] and then `super.preRestart()`. If processor implementation classes want to
-   * opt out from stopping child actors, they should override this method and call [[preRestart]] only.
-   */
-  def preRestartDefault(reason: Throwable, message: Option[Any]): Unit = {
-    try preRestart(reason, message) finally {
-      // tests fail when opting out from calling super.preRestart and stopping children - the method description
-      // might be misleading. To allow the Processor to be used as a stackable modification we need to call
-      // `super.aroundPreRestart`. Since calling both super.preRestart and super.aroundPreRestart would run
-      // postStop twice, the logic from  super.preRestart (from UnrestrictedStash and Actor) has been copied here.
-      try { unstashAll() } finally {
-        context.children foreach { child ⇒
-          context.unwatch(child)
-          context.stop(child)
-        }
-        super.aroundPreRestart(reason, message)
-      }
     }
   }
 

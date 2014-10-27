@@ -4,13 +4,12 @@
 
 package akka.persistence
 
-import scala.concurrent.duration._
-import scala.collection.immutable.Seq
-
-import com.typesafe.config._
-
 import akka.actor._
 import akka.testkit._
+import com.typesafe.config._
+import scala.concurrent.duration._
+import scala.collection.immutable.Seq
+import scala.util.control.NoStackTrace
 
 object ProcessorSpec {
   class RecoverTestProcessor(name: String) extends NamedProcessor(name) {
@@ -140,9 +139,28 @@ object ProcessorSpec {
     override def persistenceId: String = "StackableTestPersistentActor"
 
     def receive = {
-      case "restart" ⇒ throw new Exception("triggering restart")
+      case "restart" ⇒ throw new Exception("triggering restart") with NoStackTrace { override def toString = "Boom!" }
     }
 
+    override def preStart(): Unit = {
+      probe ! "preStart"
+      super.preStart()
+    }
+
+    override def postStop(): Unit = {
+      probe ! "postStop"
+      super.postStop()
+    }
+
+    override def preRestart(reason: Throwable, message: Option[Any]): Unit = {
+      probe ! "preRestart"
+      super.preRestart(reason, message)
+    }
+
+    override def postRestart(reason: Throwable): Unit = {
+      probe ! "postRestart"
+      super.postRestart(reason)
+    }
   }
 
   object StackableTestProcessor {
@@ -203,8 +221,8 @@ object ProcessorSpec {
 }
 
 abstract class ProcessorSpec(config: Config) extends AkkaSpec(config) with PersistenceSpec with ImplicitSender {
-  import ProcessorSpec._
   import JournalProtocol._
+  import ProcessorSpec._
 
   override protected def beforeEach() {
     super.beforeEach()
@@ -425,16 +443,28 @@ abstract class ProcessorSpec(config: Config) extends AkkaSpec(config) with Persi
       val processor = system.actorOf(Props(classOf[StackableTestProcessor], testActor))
       expectMsg("mixin aroundPreStart")
       expectMsg("base aroundPreStart")
+      expectMsg("preStart")
+
       processor ! "restart"
       expectMsg("mixin aroundReceive")
       expectMsg("base aroundReceive")
+
       expectMsg("mixin aroundPreRestart")
       expectMsg("base aroundPreRestart")
+      expectMsg("preRestart")
+      expectMsg("postStop")
+
       expectMsg("mixin aroundPostRestart")
       expectMsg("base aroundPostRestart")
+      expectMsg("postRestart")
+      expectMsg("preStart")
+
       processor ! PoisonPill
       expectMsg("mixin aroundPostStop")
       expectMsg("base aroundPostStop")
+      expectMsg("postStop")
+
+      expectNoMsg(100.millis)
     }
   }
 }
